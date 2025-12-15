@@ -1,4 +1,4 @@
-package httpclient
+package reqx
 
 import (
 	"bytes"
@@ -131,7 +131,7 @@ func (c *RequestBuilder) Do(successTarget any, errorTarget any) (*Response, erro
 			if successTarget != nil {
 				if err := json.Unmarshal(response.Body, successTarget); err != nil {
 					slog.Error("failed to unmarshal success response",
-						"package", "httpclient",
+						"package", "reqx",
 						"error", err,
 					)
 				}
@@ -140,7 +140,7 @@ func (c *RequestBuilder) Do(successTarget any, errorTarget any) (*Response, erro
 			if errorTarget != nil {
 				if err := json.Unmarshal(response.Body, errorTarget); err != nil {
 					slog.Error("failed to unmarshal error response",
-						"package", "httpclient",
+						"package", "reqx",
 						"error", err,
 					)
 				}
