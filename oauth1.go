@@ -13,8 +13,8 @@ import (
 	"github.com/google/uuid"
 )
 
-func (b *RequestBuilder) generateOAuth1Header(method, fullURL string) (string, error) {
-	oauth := b.client.oauth1
+func (r *RequestBuilder) generateOAuth1Header(method, fullURL string) (string, error) {
+	oauth := r.client.oauth1
 
 	nonce := uuid.New().String()
 	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
@@ -28,7 +28,7 @@ func (b *RequestBuilder) generateOAuth1Header(method, fullURL string) (string, e
 		"oauth_version":          "1.0",
 	}
 
-	signature, err := b.generateOAuth1Signature(method, fullURL, params)
+	signature, err := r.generateOAuth1Signature(method, fullURL, params)
 	if err != nil {
 		return "", err
 	}
@@ -52,8 +52,8 @@ func (b *RequestBuilder) generateOAuth1Header(method, fullURL string) (string, e
 	return builder.String(), nil
 }
 
-func (b *RequestBuilder) generateOAuth1Signature(method, fullURL string, params map[string]string) (string, error) {
-	oauth := b.client.oauth1
+func (r *RequestBuilder) generateOAuth1Signature(method, fullURL string, params map[string]string) (string, error) {
+	oauth := r.client.oauth1
 
 	u, err := url.Parse(fullURL)
 	if err != nil {

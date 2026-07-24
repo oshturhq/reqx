@@ -3,60 +3,69 @@ package reqx
 import (
 	"context"
 	"encoding/base64"
+	"errors"
+	"maps"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
 
+type callerHeadersKey struct{}
+
 type ClientBuilder struct {
-	context     context.Context
-	baseUrl     string
-	timeout     time.Duration
-	queryParams map[string]string
-	headers     map[string]string
-	contentType ContentType
-	oauth1      *OAuth1Config
-	retryConfig *RetryConfig
+	ctx              context.Context
+	baseURL          string
+	timeout          time.Duration
+	queryParams      map[string]string
+	headers          map[string]string
+	contentType      ContentType
+	oauth1           *OAuth1Config
+	retryConfig      *RetryConfig
+	maxResponseBytes int64
+	maxRedirects     int
 }
 
 func NewClientBuilder() *ClientBuilder {
 	return &ClientBuilder{
-		context:     context.Background(),
+		ctx:         context.Background(),
 		queryParams: make(map[string]string),
 		headers:     make(map[string]string),
 		retryConfig: &RetryConfig{
 			MaxRetries: 3,
 			BackoffMs:  1000,
 		},
+		maxResponseBytes: DefaultMaxResponseBytes,
+		maxRedirects:     DefaultMaxRedirects,
 	}
 }
 
-func (h *ClientBuilder) Context(ctx context.Context) *ClientBuilder {
-	h.context = ctx
-	return h
+func (b *ClientBuilder) Context(ctx context.Context) *ClientBuilder {
+	b.ctx = ctx
+	return b
 }
 
-func (h *ClientBuilder) BaseUrl(baseUrl string) *ClientBuilder {
-	h.baseUrl = baseUrl
-	return h
+func (b *ClientBuilder) BaseURL(baseURL string) *ClientBuilder {
+	b.baseURL = baseURL
+	return b
 }
 
-func (c *ClientBuilder) JsonContentType() *ClientBuilder {
-	c.contentType = ContentTypeJSON
-	return c
+func (b *ClientBuilder) JSONContentType() *ClientBuilder {
+	b.contentType = ContentTypeJSON
+	return b
 }
 
-func (c *ClientBuilder) FormUrlencodedContentType() *ClientBuilder {
-	c.contentType = ContentTypeFormUrlencoded
-	return c
+func (b *ClientBuilder) FormURLEncodedContentType() *ClientBuilder {
+	b.contentType = ContentTypeFormURLEncoded
+	return b
 }
 
-func (c *ClientBuilder) MultipartFormContentType() *ClientBuilder {
-	c.contentType = ContentTypeMultipartForm
-	return c
+func (b *ClientBuilder) MultipartFormContentType() *ClientBuilder {
+	b.contentType = ContentTypeMultipartForm
+	return b
 }
 
-func (h *ClientBuilder) BasicAuth(username string, password string) *ClientBuilder {
+func (b *ClientBuilder) BasicAuth(username string, password string) *ClientBuilder {
 	var credBuilder strings.Builder
 	credBuilder.WriteString(username)
 	credBuilder.WriteString(":")
@@ -67,64 +76,128 @@ func (h *ClientBuilder) BasicAuth(username string, password string) *ClientBuild
 	authBuilder.WriteString("Basic ")
 	authBuilder.WriteString(base64.StdEncoding.EncodeToString([]byte(credentials)))
 
-	h.headers["Authorization"] = authBuilder.String()
+	b.headers["Authorization"] = authBuilder.String()
 
-	return h
+	return b
 }
 
-func (h *ClientBuilder) BearerAuth(token string) *ClientBuilder {
+func (b *ClientBuilder) BearerAuth(token string) *ClientBuilder {
 	var builder strings.Builder
 	builder.WriteString("Bearer ")
 	builder.WriteString(token)
 
-	h.headers["Authorization"] = builder.String()
+	b.headers["Authorization"] = builder.String()
 
-	return h
+	return b
 }
 
-func (h *ClientBuilder) OAuth1(consumerKey, consumerSecret, accessToken, accessTokenSecret string) *ClientBuilder {
-	h.oauth1 = &OAuth1Config{
+func (b *ClientBuilder) OAuth1(consumerKey, consumerSecret, accessToken, accessTokenSecret string) *ClientBuilder {
+	b.oauth1 = &OAuth1Config{
 		ConsumerKey:       consumerKey,
 		ConsumerSecret:    consumerSecret,
 		AccessToken:       accessToken,
 		AccessTokenSecret: accessTokenSecret,
 	}
-	return h
+	return b
 }
 
-func (h *ClientBuilder) Timeout(timeout time.Duration) *ClientBuilder {
-	h.timeout = timeout
-	return h
+func (b *ClientBuilder) Timeout(timeout time.Duration) *ClientBuilder {
+	b.timeout = timeout
+	return b
 }
 
-func (c *ClientBuilder) QueryParam(key string, value string) *ClientBuilder {
-	c.queryParams[key] = value
-	return c
+func (b *ClientBuilder) QueryParam(key string, value string) *ClientBuilder {
+	b.queryParams[key] = value
+	return b
 }
 
-func (h *ClientBuilder) Header(key, value string) *ClientBuilder {
-	h.headers[key] = value
-	return h
+func (b *ClientBuilder) Header(key, value string) *ClientBuilder {
+	b.headers[key] = value
+	return b
 }
 
-func (h *ClientBuilder) RetryConfig(maxRetries int, backoffMs int) *ClientBuilder {
-	h.retryConfig = &RetryConfig{
+func (b *ClientBuilder) RetryConfig(maxRetries int, backoffMs int) *ClientBuilder {
+	b.retryConfig = &RetryConfig{
 		MaxRetries: maxRetries,
 		BackoffMs:  backoffMs,
 	}
-	return h
+	return b
 }
 
-func (h *ClientBuilder) Build() *Client {
+func (b *ClientBuilder) MaxResponseBytes(limit int64) *ClientBuilder {
+	b.maxResponseBytes = limit
+	return b
+}
+
+func (b *ClientBuilder) MaxRedirects(maxRedirects int) *ClientBuilder {
+	b.maxRedirects = maxRedirects
+	return b
+}
+
+func (b *ClientBuilder) Build() (*Client, error) {
+	var baseURL *url.URL
+
+	if b.baseURL != "" {
+		parsed, err := url.Parse(b.baseURL)
+		if err != nil {
+			return nil, errors.Join(ErrInvalidURL, err)
+		}
+		if parsed.Scheme == "" || parsed.Host == "" {
+			return nil, ErrInvalidURL
+		}
+		baseURL = parsed
+	}
+
+	if b.oauth1 != nil && b.headers["Authorization"] != "" {
+		return nil, ErrAuthConflict
+	}
+
+	queryParams := make(map[string]string, len(b.queryParams))
+	maps.Copy(queryParams, b.queryParams)
+	headers := make(map[string]string, len(b.headers))
+	maps.Copy(headers, b.headers)
+
 	return &Client{
-		context:     h.context,
-		client:      &http.Client{Timeout: h.timeout},
-		baseUrl:     h.baseUrl,
-		timeout:     h.timeout,
-		queryParams: h.queryParams,
-		headers:     h.headers,
-		contentType: h.contentType,
-		oauth1:      h.oauth1,
-		retryConfig: h.retryConfig,
+		ctx:     b.ctx,
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout:       b.timeout,
+			CheckRedirect: redirectPolicy(b.maxRedirects),
+		},
+		queryParams:      queryParams,
+		headers:          headers,
+		contentType:      b.contentType,
+		oauth1:           b.oauth1,
+		retryConfig:      b.retryConfig,
+		maxResponseBytes: b.maxResponseBytes,
+	}, nil
+}
+
+func redirectPolicy(maxRedirects int) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if maxRedirects <= 0 {
+			return http.ErrUseLastResponse
+		}
+
+		if len(via) >= maxRedirects {
+			return ErrTooManyRedirects
+		}
+
+		initial := via[0].URL
+
+		if initial.Scheme == "https" && req.URL.Scheme != "https" {
+			return ErrRedirectDowngrade
+		}
+
+		if req.URL.Host != initial.Host {
+			if names, ok := req.Context().Value(callerHeadersKey{}).([]string); ok {
+				for _, name := range names {
+					req.Header.Del(name)
+				}
+			}
+			req.Header.Del("Authorization")
+		}
+
+		return nil
 	}
 }

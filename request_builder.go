@@ -4,19 +4,30 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
 )
 
+type bodySource struct {
+	get         func() (io.Reader, error)
+	contentType string
+	replayable  bool
+}
+
 func (c *Client) NewRequestBuilder() *RequestBuilder {
+	queryParams := make(map[string]string, len(c.queryParams))
+	maps.Copy(queryParams, c.queryParams)
+
 	return &RequestBuilder{
 		client:      c,
 		method:      MethodGet,
 		path:        "",
-		queryParams: c.queryParams,
+		queryParams: queryParams,
 		headers:     make(map[string]string),
 		contentType: ContentTypeJSON,
 		body:        nil,
@@ -43,254 +54,354 @@ func (c *Client) Patch(path string) *RequestBuilder {
 	return c.NewRequestBuilder().Method(MethodPatch).Path(path)
 }
 
-func (c *RequestBuilder) Method(method Method) *RequestBuilder {
-	c.method = method
-	return c
+func (r *RequestBuilder) Method(method Method) *RequestBuilder {
+	r.method = method
+	return r
 }
 
-func (c *RequestBuilder) Path(path string) *RequestBuilder {
-	c.path = path
-	return c
+func (r *RequestBuilder) Path(path string) *RequestBuilder {
+	r.path = path
+	return r
 }
 
-func (c *RequestBuilder) QueryParam(key string, value string) *RequestBuilder {
-	c.queryParams[key] = value
-	return c
+func (r *RequestBuilder) QueryParam(key string, value string) *RequestBuilder {
+	r.queryParams[key] = value
+	return r
 }
 
-func (c *RequestBuilder) Header(key string, value string) *RequestBuilder {
-	c.headers[key] = value
-	return c
+func (r *RequestBuilder) Header(key string, value string) *RequestBuilder {
+	r.headers[key] = value
+	return r
 }
 
-func (c *RequestBuilder) Body(body any) *RequestBuilder {
-	c.body = body
-	return c
+func (r *RequestBuilder) Body(body any) *RequestBuilder {
+	r.body = body
+	return r
 }
 
-func (c *RequestBuilder) BodyReader(reader io.Reader) *RequestBuilder {
-	c.body = reader
-	return c
+func (r *RequestBuilder) BodyReader(reader io.Reader) *RequestBuilder {
+	r.body = reader
+	return r
 }
 
-func (c *RequestBuilder) JsonContentType() *RequestBuilder {
-	c.contentType = ContentTypeJSON
-	return c
+func (r *RequestBuilder) JSONContentType() *RequestBuilder {
+	r.contentType = ContentTypeJSON
+	return r
 }
 
-func (c *RequestBuilder) FormUrlencodedContentType() *RequestBuilder {
-	c.contentType = ContentTypeFormUrlencoded
-	return c
+func (r *RequestBuilder) FormURLEncodedContentType() *RequestBuilder {
+	r.contentType = ContentTypeFormURLEncoded
+	return r
 }
 
-func (c *RequestBuilder) MultipartFormContentType() *RequestBuilder {
-	c.contentType = ContentTypeMultipartForm
-	return c
+func (r *RequestBuilder) MultipartFormContentType() *RequestBuilder {
+	r.contentType = ContentTypeMultipartForm
+	return r
 }
 
-func (c *RequestBuilder) MultipartFormBody() *MultipartFormBuilder {
+func (r *RequestBuilder) MultipartFormBody() *MultipartFormBuilder {
 	return &MultipartFormBuilder{
-		requestBuilder: c,
+		requestBuilder: r,
 		formData:       &MultipartFormData{},
 	}
 }
 
-func (c *RequestBuilder) Do(successTarget any, errorTarget any) (*Response, error) {
-	return c.executeWithRetry(func() (*Response, error) {
-		url := c.buildUrl()
-		req, err := c.buildRequest(c.client.context, url)
-		if err != nil {
-			return nil, err
-		}
-
-		resp, err := c.client.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			err := resp.Body.Close()
-			if err != nil {
-				slog.Error("Failed to close response body",
-					"component", "RequestBuilder",
-					"error", err)
-			}
-		}()
-
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-
-		response := &Response{
-			Status:  resp.StatusCode,
-			Body:    bodyBytes,
-			Headers: resp.Header,
-		}
-
-		if response.IsSuccess() {
-			if successTarget != nil {
-				if err := json.Unmarshal(response.Body, successTarget); err != nil {
-					slog.Error("failed to unmarshal success response",
-						"package", "reqx",
-						"error", err,
-					)
-				}
-			}
-		} else {
-			if errorTarget != nil {
-				if err := json.Unmarshal(response.Body, errorTarget); err != nil {
-					slog.Error("failed to unmarshal error response",
-						"package", "reqx",
-						"error", err,
-					)
-				}
-			}
-		}
-
-		return response, nil
-	})
-}
-
-func (c *RequestBuilder) DoRaw() (*Response, error) {
-	return c.executeWithRetry(func() (*Response, error) {
-		url := c.buildUrl()
-		req, err := c.buildRequest(c.client.context, url)
-		if err != nil {
-			return nil, err
-		}
-
-		resp, err := c.client.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			err := resp.Body.Close()
-			if err != nil {
-				slog.Error("Failed to close response body",
-					"component", "RequestBuilder",
-					"error", err)
-			}
-		}()
-
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-
-		response := &Response{
-			Status:  resp.StatusCode,
-			Body:    bodyBytes,
-			Headers: resp.Header,
-		}
-
-		return response, nil
-	})
-}
-
-func (c *RequestBuilder) DoStream() (*Response, error) {
-	return c.executeWithRetry(func() (*Response, error) {
-		url := c.buildUrl()
-		req, err := c.buildRequest(c.client.context, url)
-		if err != nil {
-			return nil, err
-		}
-
-		resp, err := c.client.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		response := &Response{
-			Status:     resp.StatusCode,
-			Headers:    resp.Header,
-			BodyReader: resp.Body,
-		}
-
-		return response, nil
-	})
-}
-
-func (c *RequestBuilder) buildUrl() string {
-	var builder strings.Builder
-	builder.WriteString(c.client.baseUrl)
-	builder.WriteString(c.path)
-
-	u, _ := url.Parse(builder.String())
-	q := u.Query()
-	for k, v := range c.queryParams {
-		q.Set(k, v)
-	}
-	u.RawQuery = q.Encode()
-	return u.String()
-}
-
-func (b *RequestBuilder) buildRequest(ctx context.Context, fullURL string) (*http.Request, error) {
-	var buf io.Reader
-	if b.body != nil {
-		switch body := b.body.(type) {
-		case io.Reader:
-			buf = body
-		case []byte:
-			buf = bytes.NewReader(body)
-		case string:
-			buf = strings.NewReader(body)
-		default:
-			switch b.contentType {
-			case ContentTypeJSON:
-				j, err := json.Marshal(body)
-				if err != nil {
-					return nil, err
-				}
-				buf = bytes.NewBuffer(j)
-			case ContentTypeFormUrlencoded:
-				form, ok := body.(url.Values)
-				if !ok {
-					return nil, ErrInvalidBody
-				}
-				buf = bytes.NewBufferString(form.Encode())
-			case ContentTypeMultipartForm:
-				formData, ok := body.(*MultipartFormData)
-				if !ok {
-					return nil, ErrInvalidBody
-				}
-				multipartBuf, contentType, err := b.buildMultipartForm(formData)
-				if err != nil {
-					return nil, err
-				}
-				buf = multipartBuf
-				b.contentType = ContentType(contentType)
-			}
-		}
-	}
-
-	req, err := http.NewRequestWithContext(ctx, string(b.method), fullURL, buf)
+func (r *RequestBuilder) Do(successTarget any, errorTarget any) (*Response, error) {
+	fullURL, body, err := r.prepare()
 	if err != nil {
 		return nil, err
 	}
 
-	if b.client.oauth1 != nil {
-		authHeader, err := b.generateOAuth1Header(string(b.method), fullURL)
+	return r.executeWithRetry(body.replayable, func() (*Response, error) {
+		response, err := r.roundTrip(fullURL, body)
+		if err != nil {
+			return nil, err
+		}
+
+		target := errorTarget
+		if response.IsSuccess() {
+			target = successTarget
+		}
+
+		if target != nil {
+			if err := json.Unmarshal(response.Body, target); err != nil {
+				return response, errors.Join(ErrDecodeResponse, err)
+			}
+		}
+
+		return response, nil
+	})
+}
+
+func (r *RequestBuilder) DoRaw() (*Response, error) {
+	fullURL, body, err := r.prepare()
+	if err != nil {
+		return nil, err
+	}
+
+	return r.executeWithRetry(body.replayable, func() (*Response, error) {
+		return r.roundTrip(fullURL, body)
+	})
+}
+
+func (r *RequestBuilder) DoStream() (*Response, error) {
+	fullURL, body, err := r.prepare()
+	if err != nil {
+		return nil, err
+	}
+
+	return r.executeWithRetry(body.replayable, func() (*Response, error) {
+		req, err := r.buildRequest(r.client.ctx, fullURL, body)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := r.client.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		return &Response{
+			Status:     resp.StatusCode,
+			Headers:    resp.Header,
+			BodyReader: resp.Body,
+		}, nil
+	})
+}
+
+func (r *RequestBuilder) prepare() (string, *bodySource, error) {
+	fullURL, err := r.buildURL()
+	if err != nil {
+		return "", nil, err
+	}
+
+	body, err := r.resolveBody()
+	if err != nil {
+		return "", nil, err
+	}
+
+	return fullURL, body, nil
+}
+
+func (r *RequestBuilder) roundTrip(fullURL string, body *bodySource) (*Response, error) {
+	req, err := r.buildRequest(r.client.ctx, fullURL, body)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := r.client.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Error("failed to close response body",
+				"package", "reqx",
+				"error", err)
+		}
+	}()
+
+	bodyBytes, err := r.client.readBody(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Response{
+		Status:  resp.StatusCode,
+		Body:    bodyBytes,
+		Headers: resp.Header,
+	}, nil
+}
+
+func (c *Client) readBody(reader io.Reader) ([]byte, error) {
+	if c.maxResponseBytes <= 0 {
+		return io.ReadAll(reader)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(reader, c.maxResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+
+	if int64(len(data)) > c.maxResponseBytes {
+		return nil, ErrResponseTooLarge
+	}
+
+	return data, nil
+}
+
+func (r *RequestBuilder) buildURL() (string, error) {
+	base := r.client.baseURL
+
+	ref, err := url.Parse(r.path)
+	if err != nil {
+		return "", errors.Join(ErrInvalidURL, err)
+	}
+
+	var u *url.URL
+
+	if base == nil {
+		if ref.Scheme == "" || ref.Host == "" {
+			return "", ErrInvalidURL
+		}
+		u = ref
+	} else {
+		if ref.Scheme != "" || ref.Host != "" || ref.User != nil {
+			return "", ErrURLHostMismatch
+		}
+
+		u = base.JoinPath(ref.EscapedPath())
+		if !withinBasePath(base.EscapedPath(), u.EscapedPath()) {
+			return "", ErrURLPathEscape
+		}
+		u.Fragment = ref.Fragment
+	}
+
+	query := u.Query()
+	if base != nil {
+		maps.Copy(query, ref.Query())
+	}
+	for key, value := range r.queryParams {
+		query.Set(key, value)
+	}
+	u.RawQuery = query.Encode()
+
+	return u.String(), nil
+}
+
+func withinBasePath(basePath, joinedPath string) bool {
+	basePath = strings.TrimSuffix(basePath, "/")
+	if basePath == "" {
+		return true
+	}
+
+	return joinedPath == basePath || strings.HasPrefix(joinedPath, basePath+"/")
+}
+
+func (r *RequestBuilder) resolveBody() (*bodySource, error) {
+	if r.body == nil {
+		return &bodySource{replayable: true}, nil
+	}
+
+	switch body := r.body.(type) {
+	case io.Reader:
+		return singleUseBody(body, ""), nil
+	case []byte:
+		return replayableBody(body, ""), nil
+	case string:
+		return replayableBody([]byte(body), ""), nil
+	}
+
+	switch r.contentType {
+	case ContentTypeJSON:
+		encoded, err := json.Marshal(r.body)
+		if err != nil {
+			return nil, err
+		}
+		return replayableBody(encoded, ""), nil
+	case ContentTypeFormURLEncoded:
+		form, ok := r.body.(url.Values)
+		if !ok {
+			return nil, ErrInvalidBody
+		}
+		return replayableBody([]byte(form.Encode()), ""), nil
+	case ContentTypeMultipartForm:
+		formData, ok := r.body.(*MultipartFormData)
+		if !ok {
+			return nil, ErrInvalidBody
+		}
+		return multipartBody(formData)
+	}
+
+	return nil, ErrInvalidBody
+}
+
+func replayableBody(data []byte, contentType string) *bodySource {
+	return &bodySource{
+		get:         func() (io.Reader, error) { return bytes.NewReader(data), nil },
+		contentType: contentType,
+		replayable:  true,
+	}
+}
+
+func singleUseBody(reader io.Reader, contentType string) *bodySource {
+	used := false
+
+	return &bodySource{
+		get: func() (io.Reader, error) {
+			if used {
+				return nil, ErrInvalidBody
+			}
+			used = true
+			return reader, nil
+		},
+		contentType: contentType,
+	}
+}
+
+func (r *RequestBuilder) buildRequest(ctx context.Context, fullURL string, body *bodySource) (*http.Request, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var reader io.Reader
+	if body.get != nil {
+		bodyReader, err := body.get()
+		if err != nil {
+			return nil, err
+		}
+		reader = bodyReader
+	}
+
+	names := make([]string, 0, len(r.client.headers)+len(r.headers))
+	for name := range r.client.headers {
+		names = append(names, name)
+	}
+	for name := range r.headers {
+		names = append(names, name)
+	}
+	ctx = context.WithValue(ctx, callerHeadersKey{}, names)
+
+	req, err := http.NewRequestWithContext(ctx, string(r.method), fullURL, reader)
+	if err != nil {
+		return nil, err
+	}
+
+	if body.get != nil && body.replayable {
+		get := body.get
+		req.GetBody = func() (io.ReadCloser, error) {
+			bodyReader, err := get()
+			if err != nil {
+				return nil, err
+			}
+			return io.NopCloser(bodyReader), nil
+		}
+	}
+
+	for key, value := range r.client.headers {
+		req.Header.Set(key, value)
+	}
+	for key, value := range r.headers {
+		req.Header.Set(key, value)
+	}
+
+	if body.get != nil {
+		switch {
+		case body.contentType != "":
+			req.Header.Set("Content-Type", body.contentType)
+		case r.contentType != "":
+			req.Header.Set("Content-Type", string(r.contentType))
+		case r.client.contentType != "":
+			req.Header.Set("Content-Type", string(r.client.contentType))
+		}
+	}
+
+	if r.client.oauth1 != nil {
+		authHeader, err := r.generateOAuth1Header(string(r.method), fullURL)
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Authorization", authHeader)
-	}
-
-	for k, v := range b.client.headers {
-		req.Header.Set(k, v)
-	}
-	for k, v := range b.headers {
-		req.Header.Set(k, v)
-	}
-
-	if b.body != nil {
-		if b.client.contentType != "" {
-			req.Header.Set("Content-Type", string(b.client.contentType))
-		}
-
-		if b.contentType != "" {
-			req.Header.Set("Content-Type", string(b.contentType))
-		}
 	}
 
 	return req, nil

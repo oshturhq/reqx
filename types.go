@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"time"
+	"net/url"
 )
 
 type Method string
@@ -20,9 +20,14 @@ const (
 type ContentType string
 
 const (
-	ContentTypeFormUrlencoded ContentType = "application/x-www-form-urlencoded"
+	ContentTypeFormURLEncoded ContentType = "application/x-www-form-urlencoded"
 	ContentTypeJSON           ContentType = "application/json; charset=UTF-8"
 	ContentTypeMultipartForm  ContentType = "multipart/form-data"
+)
+
+const (
+	DefaultMaxResponseBytes int64 = 32 << 20
+	DefaultMaxRedirects           = 10
 )
 
 type MultipartFormData struct {
@@ -55,15 +60,15 @@ type RetryConfig struct {
 }
 
 type Client struct {
-	context     context.Context
-	client      *http.Client
-	baseUrl     string
-	timeout     time.Duration
-	queryParams map[string]string
-	headers     map[string]string
-	contentType ContentType
-	oauth1      *OAuth1Config
-	retryConfig *RetryConfig
+	ctx              context.Context
+	httpClient       *http.Client
+	baseURL          *url.URL
+	queryParams      map[string]string
+	headers          map[string]string
+	contentType      ContentType
+	oauth1           *OAuth1Config
+	retryConfig      *RetryConfig
+	maxResponseBytes int64
 }
 
 type RequestBuilder struct {

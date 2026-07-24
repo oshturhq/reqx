@@ -1,6 +1,7 @@
 package reqx
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -43,58 +44,79 @@ func (m *MultipartFormBuilder) Do(successTarget any, errorTarget any) (*Response
 	return m.requestBuilder.Do(successTarget, errorTarget)
 }
 
-func (b *RequestBuilder) buildMultipartForm(formData *MultipartFormData) (io.Reader, string, error) {
+func multipartBody(formData *MultipartFormData) (*bodySource, error) {
+	for _, file := range formData.Files {
+		if file.Reader != nil {
+			reader, contentType := streamMultipartForm(formData)
+			return singleUseBody(reader, contentType), nil
+		}
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	if err := writeMultipartForm(writer, formData); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	return replayableBody(buf.Bytes(), writer.FormDataContentType()), nil
+}
+
+func streamMultipartForm(formData *MultipartFormData) (io.Reader, string) {
 	pipeReader, pipeWriter := io.Pipe()
 	writer := multipart.NewWriter(pipeWriter)
 	contentType := writer.FormDataContentType()
 
 	go func() {
-		var writeErr error
-		defer func() {
-			if writeErr != nil {
-				err := pipeWriter.CloseWithError(writeErr)
-				if err != nil {
-					slog.Error("Failed to close pipe writer",
-						"component", "buildMultipartForm",
-						"error", err)
-				}
-			} else {
-				err := pipeWriter.Close()
-				if err != nil {
-					slog.Error("Failed to close pipe writer",
-						"component", "buildMultipartForm",
-						"error", err)
-				}
-			}
-		}()
-
-		for _, field := range formData.Fields {
-			writeErr = writer.WriteField(field.Name, field.Value)
-			if writeErr != nil {
-				return
-			}
+		writeErr := writeMultipartForm(writer, formData)
+		if writeErr == nil {
+			writeErr = writer.Close()
 		}
 
-		for _, file := range formData.Files {
-			part, err := writer.CreateFormFile(file.FieldName, file.FileName)
-			if err != nil {
-				writeErr = err
-				return
-			}
-
-			if file.Reader != nil {
-				_, writeErr = io.Copy(part, file.Reader)
-			} else if file.Data != nil {
-				_, writeErr = part.Write(file.Data)
-			}
-
-			if writeErr != nil {
-				return
-			}
+		var err error
+		if writeErr != nil {
+			err = pipeWriter.CloseWithError(writeErr)
+		} else {
+			err = pipeWriter.Close()
 		}
 
-		writeErr = writer.Close()
+		if err != nil {
+			slog.Error("failed to close pipe writer",
+				"component", "streamMultipartForm",
+				"error", err)
+		}
 	}()
 
-	return pipeReader, contentType, nil
+	return pipeReader, contentType
+}
+
+func writeMultipartForm(writer *multipart.Writer, formData *MultipartFormData) error {
+	for _, field := range formData.Fields {
+		if err := writer.WriteField(field.Name, field.Value); err != nil {
+			return err
+		}
+	}
+
+	for _, file := range formData.Files {
+		part, err := writer.CreateFormFile(file.FieldName, file.FileName)
+		if err != nil {
+			return err
+		}
+
+		switch {
+		case file.Reader != nil:
+			if _, err := io.Copy(part, file.Reader); err != nil {
+				return err
+			}
+		case file.Data != nil:
+			if _, err := part.Write(file.Data); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
