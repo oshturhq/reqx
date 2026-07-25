@@ -29,7 +29,7 @@ func (r *RequestBuilder) executeWithRetry(replayable bool, fn func() (*Response,
 	maxRetries := r.client.retryConfig.MaxRetries
 	backoffMs := r.client.retryConfig.BackoffMs
 
-	ctx := r.client.ctx
+	ctx := r.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}

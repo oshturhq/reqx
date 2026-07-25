@@ -73,6 +73,7 @@ type Client struct {
 
 type RequestBuilder struct {
 	client      *Client
+	ctx         context.Context
 	method      Method
 	path        string
 	queryParams map[string]string

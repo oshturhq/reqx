@@ -25,6 +25,7 @@ func (c *Client) NewRequestBuilder() *RequestBuilder {
 
 	return &RequestBuilder{
 		client:      c,
+		ctx:         c.ctx,
 		method:      MethodGet,
 		path:        "",
 		queryParams: queryParams,
@@ -52,6 +53,11 @@ func (c *Client) Delete(path string) *RequestBuilder {
 
 func (c *Client) Patch(path string) *RequestBuilder {
 	return c.NewRequestBuilder().Method(MethodPatch).Path(path)
+}
+
+func (r *RequestBuilder) Context(ctx context.Context) *RequestBuilder {
+	r.ctx = ctx
+	return r
 }
 
 func (r *RequestBuilder) Method(method Method) *RequestBuilder {
@@ -151,7 +157,7 @@ func (r *RequestBuilder) DoStream() (*Response, error) {
 	}
 
 	return r.executeWithRetry(body.replayable, func() (*Response, error) {
-		req, err := r.buildRequest(r.client.ctx, fullURL, body)
+		req, err := r.buildRequest(r.ctx, fullURL, body)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +190,7 @@ func (r *RequestBuilder) prepare() (string, *bodySource, error) {
 }
 
 func (r *RequestBuilder) roundTrip(fullURL string, body *bodySource) (*Response, error) {
-	req, err := r.buildRequest(r.client.ctx, fullURL, body)
+	req, err := r.buildRequest(r.ctx, fullURL, body)
 	if err != nil {
 		return nil, err
 	}

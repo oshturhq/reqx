@@ -2,6 +2,7 @@ package reqx
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
 	"net/url"
@@ -9,14 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 func (r *RequestBuilder) generateOAuth1Header(method, fullURL string) (string, error) {
 	oauth := r.client.oauth1
 
-	nonce := uuid.New().String()
+	nonce := rand.Text()
 	timestamp := strconv.FormatInt(time.Now().UTC().Unix(), 10)
 
 	params := map[string]string{

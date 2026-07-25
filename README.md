@@ -15,8 +15,9 @@ go get github.com/oshturhq/reqx
 - **Automatic Retry** - Configurable retry with backoff for timeouts and 5xx errors
 - **Multiple Content Types** - JSON, Form URL Encoded, Multipart Form
 - **Multipart Form Builder** - Easy file uploads with streaming support
-- **Context Support** - Full context.Context integration
+- **Context Support** - Set a context on the client, on a single request, or both
 - **Response Helpers** - Built-in status checking and JSON unmarshaling
+- **Zero Dependencies** - Standard library only
 
 ## Quick Start
 
@@ -266,7 +267,7 @@ client, err := reqx.NewClientBuilder().
 
 The backoff increases linearly with jitter applied: `backoffMs * (attempt + 1)`, randomised
 within the upper half of that window. A `Retry-After` response header takes precedence (capped
-at 30s). Backoff observes the client's context, so cancelling stops the retry schedule
+at 30s). Backoff observes the request's context, so cancelling stops the retry schedule
 immediately.
 
 Retries only happen when the request body can be produced again. Bodies set via `Body()` — JSON,
@@ -275,12 +276,37 @@ in full. A body set via `BodyReader()`, or a multipart form containing `AddFileR
 be rewound, so the request is **not** retried and the original response is returned instead of
 being resent with an empty body.
 
+### Context
+
+A context can be set on the client, on a single request, or both:
+
+```go
+// Applies to every request made with this client
+client, err := reqx.NewClientBuilder().
+    BaseURL("https://api.example.com").
+    Context(ctx).
+    Build()
+
+// Applies to this request only
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+resp, err := client.Get("/slow-endpoint").
+    Context(ctx).
+    Do(&result, &apiError)
+```
+
+Each request inherits the client's context, and `Context()` on the request overrides it for that
+request alone. Cancelling either one aborts the in-flight request and stops any pending retry
+backoff.
+
 ### Per-Request Customization
 
 You can override client settings per request:
 
 ```go
 resp, err := client.Get("/special-endpoint").
+    Context(ctx).
     Header("X-Request-ID", "abc123").
     QueryParam("special", "true").
     JSONContentType().
@@ -293,7 +319,7 @@ resp, err := client.Get("/special-endpoint").
 
 | Method | Description |
 |--------|-------------|
-| `Context(ctx)` | Set context for all requests |
+| `Context(ctx)` | Set the default context inherited by every request |
 | `BaseURL(url)` | Set base URL |
 | `Timeout(duration)` | Set request timeout |
 | `Header(key, value)` | Add default header |
@@ -313,6 +339,7 @@ resp, err := client.Get("/special-endpoint").
 
 | Method | Description |
 |--------|-------------|
+| `Context(ctx)` | Set the context for this request, overriding the client's |
 | `Path(path)` | Set request path |
 | `QueryParam(key, value)` | Add query parameter |
 | `Header(key, value)` | Add header |
